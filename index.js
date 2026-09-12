@@ -876,6 +876,80 @@ res.status(500).json({ error: "Failed to clear cart" })
 })
 
 // ==========================================
+// 5. COUPONS APIs
+// ==========================================
+app.post("/api/coupons/validate", authMiddleware, async (req, res) => {
+try {
+const { code } = req.body
+if (!code) return res.status(400).json({ error: "Coupon code is required" })
+
+const coupon = await couponsCollection.findOne({
+code: code.toUpperCase().trim(),
+isActive: true,
+})
+
+if (!coupon) {
+return res.status(404).json({ error: "Invalid or expired coupon code" })
+}
+
+const cart = await cartsCollection.findOne({ userId: req.user.uid })
+if (!cart || !cart.items || cart.items.length === 0) {
+return res.status(400).json({ error: "Your cart is empty" })
+}
+
+if (coupon.minOrderAmount && cart.subtotal < coupon.minOrderAmount) {
+return res.status(400).json({
+error: `Minimum order amount for this coupon is $${coupon.minOrderAmount}`,
+})
+}
+
+const calc = await recalculateCart(cart.items, coupon.code)
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{ $set: { ...calc, updatedAt: new Date() } }
+)
+
+res.json({
+message: `Coupon "${coupon.code}" applied successfully!`,
+discount: calc.discount,
+total: calc.total,
+coupon,
+})
+} catch (err) {
+console.error("Error validating coupon:", err)
+res.status(500).json({ error: "Failed to apply coupon" })
+}
+})
+
+app.delete("/api/coupons/remove", authMiddleware, async (req, res) => {
+try {
+const cart = await cartsCollection.findOne({ userId: req.user.uid })
+if (!cart) return res.status(404).json({ error: "Cart not found" })
+
+const calc = await recalculateCart(cart.items, null)
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{ $set: { ...calc, couponCode: null, updatedAt: new Date() } }
+)
+
+res.json({ message: "Coupon removed", cart: { ...cart, ...calc, couponCode: null } })
+} catch (err) {
+console.error("Error removing coupon:", err)
+res.status(500).json({ error: "Failed to remove coupon" })
+}
+})
+
+app.get("/api/coupons", async (req, res) => {
+try {
+const coupons = await couponsCollection.find({ isActive: true }).toArray()
+res.json(coupons)
+} catch (err) {
+console.error("Error fetching coupons:", err)
+res.status(500).json({ error: "Failed to fetch coupons" })
+}
+})
+
+// ==========================================
 // 6. ORDER APIs (Guaranteed MongoDB Persistence)
 
 
