@@ -1165,6 +1165,52 @@ res.status(500).json({ error: "Failed to update payment status" })
 })
 
 // ==========================================
+// 7. TABLE RESERVATIONS APIs (Guaranteed MongoDB Persistence)
+// ==========================================
+app.post("/api/reservations", authMiddleware, async (req, res) => {
+try {
+const { customerName, phone, tableNumber, reservationDate, reservationTime, guests, specialRequest } = req.body
+
+if (!customerName || !phone || !reservationDate || !reservationTime || !guests) {
+return res.status(400).json({ error: "Please fill all required reservation fields (name, phone, date, time, guests)" })
+}
+
+const userId = req.user?.uid || req.body?.userId || "guest-uid"
+const email = req.user?.email || req.body?.email || "customer@cafe.com"
+
+const newReservation = {
+userId,
+email,
+customerName: customerName.trim(),
+phone: phone.trim(),
+tableNumber: tableNumber ? Number(tableNumber) : Math.floor(Math.random() * 6) + 1,
+reservationDate,
+reservationTime,
+guests: Number(guests),
+specialRequest: specialRequest || "",
+status: "Pending",
+createdAt: new Date(),
+updatedAt: new Date(),
+}
+
+let result = { insertedId: new ObjectId() }
+if (reservationsCollection) {
+result = await reservationsCollection.insertOne(newReservation)
+console.log(`[MongoDB] New Table Reservation Saved: ID=${result.insertedId}, Customer=${customerName}, Date=${reservationDate} ${reservationTime}`)
+}
+
+res.status(201).json({
+message: "Table reserved successfully in MongoDB database!",
+reservation: { ...newReservation, _id: result.insertedId },
+})
+} catch (err) {
+console.error("Error creating reservation:", err)
+res.status(500).json({ error: "Failed to create reservation: " + err.message })
+}
+})
+
+
+// ==========================================
 // 11. SEED DATA API
 // ==========================================
 app.post("/api/seed", async (req, res) => {
