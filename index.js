@@ -1286,6 +1286,80 @@ console.error("Error updating reservation status:", err)
 res.status(500).json({ error: "Failed to update status" })
 }
 })
+// ==========================================
+// 8. INVENTORY & INGREDIENTS APIs
+// ==========================================
+app.get("/api/inventory", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const ingredients = await ingredientsCollection.find({}).sort({ name: 1 }).toArray()
+const enriched = ingredients.map((item) => ({
+...item,
+isLowStock: Number(item.quantity) <= Number(item.minimumStock),
+}))
+res.json(enriched)
+} catch (err) {
+console.error("Error fetching inventory:", err)
+res.status(500).json({ error: "Failed to fetch inventory" })
+}
+})
+
+app.post("/api/inventory", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { name, quantity, unit, minimumStock, supplierId, costPerUnit } = req.body
+if (!name || quantity === undefined || !unit) {
+return res.status(400).json({ error: "Name, quantity, and unit are required" })
+}
+
+const newIngredient = {
+name: name.trim(),
+quantity: Number(quantity),
+unit: unit.trim(),
+minimumStock: Number(minimumStock) || 5,
+supplierId: supplierId || "",
+costPerUnit: Number(costPerUnit) || 0,
+updatedAt: new Date(),
+}
+
+const result = await ingredientsCollection.insertOne(newIngredient)
+res.status(201).json({ ...newIngredient, _id: result.insertedId })
+} catch (err) {
+console.error("Error adding ingredient:", err)
+res.status(500).json({ error: "Failed to add ingredient" })
+}
+})
+
+app.patch("/api/inventory/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { name, quantity, unit, minimumStock, supplierId, costPerUnit } = req.body
+
+const updateData = { updatedAt: new Date() }
+if (name) updateData.name = name.trim()
+if (quantity !== undefined) updateData.quantity = Number(quantity)
+if (unit) updateData.unit = unit.trim()
+if (minimumStock !== undefined) updateData.minimumStock = Number(minimumStock)
+if (supplierId !== undefined) updateData.supplierId = supplierId
+if (costPerUnit !== undefined) updateData.costPerUnit = Number(costPerUnit)
+
+await ingredientsCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+res.json({ message: "Ingredient updated successfully" })
+} catch (err) {
+console.error("Error updating ingredient:", err)
+res.status(500).json({ error: "Failed to update ingredient" })
+}
+})
+
+app.delete("/api/inventory/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+await ingredientsCollection.deleteOne({ _id: new ObjectId(id) })
+res.json({ message: "Ingredient deleted successfully" })
+} catch (err) {
+console.error("Error deleting ingredient:", err)
+res.status(500).json({ error: "Failed to delete ingredient" })
+}
+})
+
 
 // ==========================================
 // 11. SEED DATA API
