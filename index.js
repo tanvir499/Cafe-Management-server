@@ -639,6 +639,242 @@ console.error("Error deleting food:", err)
 res.status(500).json({ error: "Failed to delete food" })
 }
 })
+
+// ==========================================
+// 4. CART APIs
+// ==========================================
+async function recalculateCart(items, couponCode = null) {
+let subtotal = 0
+const validatedItems = []
+
+for (const item of items) {
+let price = Number(item.price) || 0
+let name = item.foodName || "Item"
+let image = item.image || ""
+
+if (item.foodId && ObjectId.isValid(item.foodId) && foodsCollection) {
+try {
+const freshFood = await foodsCollection.findOne({ _id: new ObjectId(item.foodId) })
+if (freshFood) {
+price = freshFood.price
+name = freshFood.name
+image = freshFood.image
+}
+} catch (e) {}
+}
+
+const qty = Math.max(1, parseInt(item.quantity) || 1)
+const itemSubtotal = price * qty
+subtotal += itemSubtotal
+
+validatedItems.push({
+foodId: item.foodId,
+foodName: name,
+price,
+image,
+quantity: qty,
+subtotal: itemSubtotal,
+})
+}
+
+let discount = 0
+let appliedCoupon = null
+
+if (couponCode && couponsCollection) {
+const coupon = await couponsCollection.findOne({
+code: couponCode.toUpperCase().trim(),
+isActive: true,
+})
+
+if (coupon) {
+if (!coupon.minOrderAmount || subtotal >= coupon.minOrderAmount) {
+if (coupon.discountType === "percentage") {
+discount = (subtotal * coupon.discountAmount) / 100
+if (coupon.maxDiscount && discount > coupon.maxDiscount) {
+discount = coupon.maxDiscount
+}
+} else {
+discount = Math.min(coupon.discountAmount, subtotal)
+}
+appliedCoupon = coupon.code
+}
+}
+}
+
+discount = Math.round(discount * 100) / 100
+const total = Math.max(0, Math.round((subtotal - discount) * 100) / 100)
+
+return {
+items: validatedItems,
+subtotal: Math.round(subtotal * 100) / 100,
+discount,
+couponCode: appliedCoupon,
+total,
+}
+}
+
+app.get("/api/cart", authMiddleware, async (req, res) => {
+try {
+const cart = await cartsCollection.findOne({ userId: req.user.uid })
+if (!cart) {
+return res.json({
+userId: req.user.uid,
+email: req.user.email,
+items: [],
+subtotal: 0,
+discount: 0,
+couponCode: null,
+total: 0,
+})
+}
+const calc = await recalculateCart(cart.items || [], cart.couponCode)
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{ $set: { ...calc, email: req.user.email, updatedAt: new Date() } }
+)
+res.json({ ...cart, ...calc })
+} catch (err) {
+console.error("Error fetching cart:", err)
+res.status(500).json({ error: "Failed to fetch cart" })
+}
+})
+
+app.post("/api/cart", authMiddleware, async (req, res) => {
+try {
+const { foodId, quantity = 1 } = req.body
+if (!foodId) return res.status(400).json({ error: "Food ID is required" })
+
+let food = null
+if (ObjectId.isValid(foodId) && foodsCollection) {
+food = await foodsCollection.findOne({ _id: new ObjectId(foodId) })
+}
+if (!food) {
+const idx = parseInt(foodId.replace("food-", "")) - 1
+if (idx >= 0 && idx < STATIC_FOODS_DATA.length) {
+food = { ...STATIC_FOODS_DATA[idx], _id: foodId }
+}
+}
+if (!food) return res.status(404).json({ error: "Food item not found" })
+
+let cart = await cartsCollection.findOne({ userId: req.user.uid })
+let items = cart ? cart.items || [] : []
+
+const existingIndex = items.findIndex((i) => i.foodId.toString() === foodId.toString())
+const addQty = Math.max(1, parseInt(quantity) || 1)
+
+if (existingIndex > -1) {
+items[existingIndex].quantity += addQty
+} else {
+items.push({
+foodId: food._id.toString(),
+foodName: food.name,
+price: food.price,
+image: food.image,
+quantity: addQty,
+subtotal: food.price * addQty,
+})
+}
+
+const calc = await recalculateCart(items, cart?.couponCode)
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{
+$set: {
+userId: req.user.uid,
+email: req.user.email,
+...calc,
+updatedAt: new Date(),
+},
+},
+{ upsert: true }
+)
+
+const updatedCart = await cartsCollection.findOne({ userId: req.user.uid })
+res.json({ message: "Item added to cart", cart: updatedCart })
+} catch (err) {
+console.error("Error adding to cart:", err)
+res.status(500).json({ error: "Failed to add to cart" })
+}
+})
+
+app.patch("/api/cart/:foodId", authMiddleware, async (req, res) => {
+try {
+const { foodId } = req.params
+const { quantity } = req.body
+
+let cart = await cartsCollection.findOne({ userId: req.user.uid })
+if (!cart) return res.status(404).json({ error: "Cart not found" })
+
+let items = cart.items || []
+const newQty = parseInt(quantity)
+
+if (newQty <= 0) {
+items = items.filter((i) => i.foodId.toString() !== foodId.toString())
+} else {
+const item = items.find((i) => i.foodId.toString() === foodId.toString())
+if (item) {
+item.quantity = newQty
+}
+}
+
+const calc = await recalculateCart(items, cart.couponCode)
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{ $set: { ...calc, updatedAt: new Date() } }
+)
+
+const updatedCart = await cartsCollection.findOne({ userId: req.user.uid })
+res.json({ message: "Cart updated", cart: updatedCart })
+} catch (err) {
+console.error("Error updating cart:", err)
+res.status(500).json({ error: "Failed to update cart" })
+}
+})
+
+app.delete("/api/cart/:foodId", authMiddleware, async (req, res) => {
+try {
+const { foodId } = req.params
+let cart = await cartsCollection.findOne({ userId: req.user.uid })
+if (!cart) return res.status(404).json({ error: "Cart not found" })
+
+const items = (cart.items || []).filter((i) => i.foodId.toString() !== foodId.toString())
+const calc = await recalculateCart(items, cart.couponCode)
+
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{ $set: { ...calc, updatedAt: new Date() } }
+)
+
+const updatedCart = await cartsCollection.findOne({ userId: req.user.uid })
+res.json({ message: "Item removed from cart", cart: updatedCart })
+} catch (err) {
+console.error("Error removing item from cart:", err)
+res.status(500).json({ error: "Failed to remove item" })
+}
+})
+
+app.delete("/api/cart", authMiddleware, async (req, res) => {
+try {
+await cartsCollection.updateOne(
+{ userId: req.user.uid },
+{
+$set: {
+items: [],
+subtotal: 0,
+discount: 0,
+couponCode: null,
+total: 0,
+updatedAt: new Date(),
+},
+}
+)
+res.json({ message: "Cart cleared successfully" })
+} catch (err) {
+console.error("Error clearing cart:", err)
+res.status(500).json({ error: "Failed to clear cart" })
+}
+})
+
 // ==========================================
 // 6. ORDER APIs (Guaranteed MongoDB Persistence)
 
