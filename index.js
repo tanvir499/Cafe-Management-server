@@ -426,7 +426,97 @@ app.get("/api/admin/users", authMiddleware, adminMiddleware, async (req, res) =>
 
 // ==========================================
 // 2. CATEGORIES APIs
+// ==========================================
+app.get("/api/categories", async (req, res) => {
+try {
+let categories = []
+if (categoriesCollection) {
+categories = await categoriesCollection.find({}).toArray()
+}
+if (categories.length === 0) {
+categories = SAMPLE_CATEGORIES
+}
+const enriched = await Promise.all(
+categories.map(async (cat) => {
+const foodCount = foodsCollection ? await foodsCollection.countDocuments({ category: cat.name }) : 2
+return { ...cat, foodCount }
+})
+)
+res.json(enriched)
+} catch (err) {
+console.error("Error fetching categories:", err)
+res.status(500).json({ error: "Failed to fetch categories" })
+}
+})
 
+app.post("/api/categories", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { name, description, image } = req.body
+if (!name) return res.status(400).json({ error: "Category name is required" })
+
+const existing = await categoriesCollection.findOne({ name: { $regex: new RegExp(`^${name}$`, "i") } })
+if (existing) return res.status(400).json({ error: "Category already exists" })
+
+const newCategory = {
+name: name.trim(),
+description: description || "",
+image: image || "https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?w=500",
+createdAt: new Date(),
+}
+const result = await categoriesCollection.insertOne(newCategory)
+res.status(201).json({ ...newCategory, _id: result.insertedId })
+} catch (err) {
+console.error("Error creating category:", err)
+res.status(500).json({ error: "Failed to create category" })
+}
+})
+
+app.patch("/api/categories/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { name, description, image } = req.body
+
+const oldCategory = await categoriesCollection.findOne({ _id: new ObjectId(id) })
+if (!oldCategory) return res.status(404).json({ error: "Category not found" })
+
+const updateData = {}
+if (name) updateData.name = name.trim()
+if (description !== undefined) updateData.description = description
+if (image) updateData.image = image
+
+await categoriesCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+
+if (name && name.trim() !== oldCategory.name) {
+await foodsCollection.updateMany({ category: oldCategory.name }, { $set: { category: name.trim() } })
+}
+
+res.json({ message: "Category updated successfully" })
+} catch (err) {
+console.error("Error updating category:", err)
+res.status(500).json({ error: "Failed to update category" })
+}
+})
+
+app.delete("/api/categories/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const category = await categoriesCollection.findOne({ _id: new ObjectId(id) })
+if (!category) return res.status(404).json({ error: "Category not found" })
+
+const foodCount = await foodsCollection.countDocuments({ category: category.name })
+if (foodCount > 0) {
+return res.status(400).json({
+error: `Cannot delete category "${category.name}". It contains ${foodCount} food item(s). Reassign or delete the food items first.`,
+})
+}
+
+await categoriesCollection.deleteOne({ _id: new ObjectId(id) })
+res.json({ message: "Category deleted successfully" })
+} catch (err) {
+console.error("Error deleting category:", err)
+res.status(500).json({ error: "Failed to delete category" })
+}
+})
 
 // ==========================================
 // 6. ORDER APIs (Guaranteed MongoDB Persistence)
