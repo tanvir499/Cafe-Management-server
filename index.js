@@ -1431,6 +1431,62 @@ res.status(500).json({ error: "Failed to delete supplier" })
 }
 })
 
+
+
+
+
+
+
+
+// ==========================================
+// 10. ADMIN DASHBOARD STATS API
+// ==========================================
+app.get("/api/admin/stats", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const totalCustomers = await usersCollection.countDocuments({ role: "customer" })
+const totalOrders = await ordersCollection.countDocuments({})
+
+const startOfToday = new Date()
+startOfToday.setHours(0, 0, 0, 0)
+const todayOrders = await ordersCollection.countDocuments({
+createdAt: { $gte: startOfToday },
+})
+
+const pendingOrders = await ordersCollection.countDocuments({ orderStatus: "Pending" })
+const completedOrders = await ordersCollection.countDocuments({ orderStatus: "Completed" })
+
+const allOrders = await ordersCollection.find({}).toArray()
+const totalRevenue = allOrders.reduce((sum, order) => sum + (order.total || 0), 0)
+
+const allIngredients = await ingredientsCollection.find({}).toArray()
+const lowStockItems = allIngredients.filter((i) => Number(i.quantity) <= Number(i.minimumStock)).length
+
+const totalMenuItems = await foodsCollection.countDocuments({})
+const totalCategories = await categoriesCollection.countDocuments({})
+const activeReservations = await reservationsCollection.countDocuments({
+status: { $in: ["Pending", "Confirmed"] },
+})
+
+const recentOrders = await ordersCollection.find({}).sort({ createdAt: -1 }).limit(6).toArray()
+
+res.json({
+totalCustomers,
+totalOrders,
+todayOrders,
+totalRevenue: Math.round(totalRevenue * 100) / 100,
+pendingOrders,
+completedOrders,
+lowStockItems,
+totalMenuItems,
+totalCategories,
+activeReservations,
+recentOrders,
+})
+} catch (err) {
+console.error("Error fetching admin stats:", err)
+res.status(500).json({ error: "Failed to calculate stats" })
+}
+})
 // ==========================================
 // 11. SEED DATA API
 // ==========================================
