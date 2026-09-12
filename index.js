@@ -1208,7 +1208,84 @@ console.error("Error creating reservation:", err)
 res.status(500).json({ error: "Failed to create reservation: " + err.message })
 }
 })
+app.get("/api/reservations/my", authMiddleware, async (req, res) => {
+try {
+let reservations = []
+const uid = req.user?.uid || req.query?.userId
+const email = req.user?.email || req.query?.email
 
+if (reservationsCollection) {
+const userQuery = {
+$or: [
+...(uid ? [{ userId: uid }] : []),
+...(email ? [{ email: email }] : []),
+],
+}
+reservations = await reservationsCollection
+.find(userQuery)
+.sort({ reservationDate: -1, createdAt: -1 })
+.toArray()
+}
+res.json(reservations)
+} catch (err) {
+console.error("Error fetching reservations:", err)
+res.status(500).json({ error: "Failed to fetch reservations" })
+}
+})
+
+app.patch("/api/reservations/:id/cancel", authMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+if (reservationsCollection) {
+if (ObjectId.isValid(id)) {
+await reservationsCollection.updateOne(
+{ _id: new ObjectId(id) },
+{ $set: { status: "Cancelled", updatedAt: new Date() } }
+)
+} else {
+await reservationsCollection.updateOne(
+{ _id: id },
+{ $set: { status: "Cancelled", updatedAt: new Date() } }
+)
+}
+}
+res.json({ message: "Reservation cancelled successfully" })
+} catch (err) {
+console.error("Error cancelling reservation:", err)
+res.status(500).json({ error: "Failed to cancel reservation" })
+}
+})
+
+app.get("/api/admin/reservations", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+let reservations = []
+if (reservationsCollection) {
+reservations = await reservationsCollection.find({}).sort({ reservationDate: -1, createdAt: -1 }).toArray()
+}
+res.json(reservations)
+} catch (err) {
+console.error("Error fetching admin reservations:", err)
+res.status(500).json({ error: "Failed to fetch reservations" })
+}
+})
+
+app.patch("/api/admin/reservations/:id/status", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { status } = req.body
+if (reservationsCollection) {
+if (ObjectId.isValid(id)) {
+await reservationsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { status, updatedAt: new Date() } })
+} else {
+await reservationsCollection.updateOne({ _id: id }, { $set: { status, updatedAt: new Date() } })
+}
+}
+res.json({ message: "Reservation status updated" })
+} catch (err) {
+console.error("Error updating reservation status:", err)
+res.status(500).json({ error: "Failed to update status" })
+}
+})
 
 // ==========================================
 // 11. SEED DATA API
