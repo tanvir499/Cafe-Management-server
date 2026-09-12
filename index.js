@@ -1359,7 +1359,77 @@ console.error("Error deleting ingredient:", err)
 res.status(500).json({ error: "Failed to delete ingredient" })
 }
 })
+// ==========================================
+// 9. SUPPLIERS APIs
+// ==========================================
+app.get("/api/suppliers", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const suppliers = await suppliersCollection.find({}).sort({ name: 1 }).toArray()
+res.json(suppliers)
+} catch (err) {
+console.error("Error fetching suppliers:", err)
+res.status(500).json({ error: "Failed to fetch suppliers" })
+}
+})
 
+app.post("/api/suppliers", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { name, contactPerson, email, phone, address, supplyItems } = req.body
+if (!name || !phone) {
+return res.status(400).json({ error: "Supplier name and phone are required" })
+}
+
+const newSupplier = {
+name: name.trim(),
+contactPerson: contactPerson || "",
+email: email || "",
+phone: phone.trim(),
+address: address || "",
+supplyItems: Array.isArray(supplyItems) ? supplyItems : (supplyItems ? supplyItems.split(",").map((s) => s.trim()) : []),
+createdAt: new Date(),
+}
+
+const result = await suppliersCollection.insertOne(newSupplier)
+res.status(201).json({ ...newSupplier, _id: result.insertedId })
+} catch (err) {
+console.error("Error adding supplier:", err)
+res.status(500).json({ error: "Failed to add supplier" })
+}
+})
+
+app.patch("/api/suppliers/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { name, contactPerson, email, phone, address, supplyItems } = req.body
+
+const updateData = { updatedAt: new Date() }
+if (name) updateData.name = name.trim()
+if (contactPerson !== undefined) updateData.contactPerson = contactPerson
+if (email !== undefined) updateData.email = email
+if (phone) updateData.phone = phone.trim()
+if (address !== undefined) updateData.address = address
+if (supplyItems) {
+updateData.supplyItems = Array.isArray(supplyItems) ? supplyItems : supplyItems.split(",").map((s) => s.trim())
+}
+
+await suppliersCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+res.json({ message: "Supplier updated successfully" })
+} catch (err) {
+console.error("Error updating supplier:", err)
+res.status(500).json({ error: "Failed to update supplier" })
+}
+})
+
+app.delete("/api/suppliers/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+await suppliersCollection.deleteOne({ _id: new ObjectId(id) })
+res.json({ message: "Supplier deleted successfully" })
+} catch (err) {
+console.error("Error deleting supplier:", err)
+res.status(500).json({ error: "Failed to delete supplier" })
+}
+})
 
 // ==========================================
 // 11. SEED DATA API
