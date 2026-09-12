@@ -518,6 +518,127 @@ res.status(500).json({ error: "Failed to delete category" })
 }
 })
 
+
+// ==========================================
+// 3. FOOD MENU APIs (Guarantees 10 Foods minimum)
+// ==========================================
+app.get("/api/foods", async (req, res) => {
+try {
+const { search, category, availability } = req.query
+const query = {}
+
+if (search) {
+query.$or = [
+{ name: { $regex: search, $options: "i" } },
+{ description: { $regex: search, $options: "i" } },
+]
+}
+
+if (category && category !== "All") {
+query.category = category
+}
+
+if (availability !== undefined && availability !== "all") {
+query.isAvailable = availability === "true" || availability === true
+}
+
+let foods = []
+if (foodsCollection) {
+foods = await foodsCollection.find(query).sort({ createdAt: -1 }).toArray()
+}
+
+if (!foods || foods.length === 0) {
+foods = STATIC_FOODS_DATA
+}
+
+res.json(foods)
+} catch (err) {
+console.error("Error fetching foods:", err)
+res.json(STATIC_FOODS_DATA)
+}
+})
+
+app.get("/api/foods/:id", async (req, res) => {
+try {
+const { id } = req.params
+if (ObjectId.isValid(id) && foodsCollection) {
+const food = await foodsCollection.findOne({ _id: new ObjectId(id) })
+if (food) return res.json(food)
+}
+
+const idx = parseInt(id.replace("food-", "")) - 1
+if (idx >= 0 && idx < STATIC_FOODS_DATA.length) {
+return res.json({ ...STATIC_FOODS_DATA[idx], _id: id })
+}
+
+const fallback = STATIC_FOODS_DATA.find((f) => f.name.toLowerCase().includes(id.toLowerCase()))
+if (fallback) return res.json({ ...fallback, _id: id })
+
+res.status(404).json({ error: "Food item not found" })
+} catch (err) {
+console.error("Error fetching food:", err)
+res.status(500).json({ error: "Invalid food ID" })
+}
+})
+
+app.post("/api/foods", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { name, description, category, price, image, isAvailable } = req.body
+if (!name || !price || !category) {
+return res.status(400).json({ error: "Name, price, and category are required" })
+}
+
+const newFood = {
+name: name.trim(),
+description: description || "",
+category: category.trim(),
+price: Number(price),
+image: image || "https://images.unsplash.com/photo-1541167760496-1628856ab772?w=500",
+isAvailable: isAvailable !== undefined ? Boolean(isAvailable) : true,
+createdAt: new Date(),
+updatedAt: new Date(),
+}
+
+const result = await foodsCollection.insertOne(newFood)
+res.status(201).json({ ...newFood, _id: result.insertedId })
+} catch (err) {
+console.error("Error adding food:", err)
+res.status(500).json({ error: "Failed to add food" })
+}
+})
+
+app.patch("/api/foods/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { name, description, category, price, image, isAvailable } = req.body
+
+const updateData = { updatedAt: new Date() }
+if (name) updateData.name = name.trim()
+if (description !== undefined) updateData.description = description
+if (category) updateData.category = category.trim()
+if (price !== undefined) updateData.price = Number(price)
+if (image) updateData.image = image
+if (isAvailable !== undefined) updateData.isAvailable = Boolean(isAvailable)
+
+await foodsCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateData })
+const updated = await foodsCollection.findOne({ _id: new ObjectId(id) })
+res.json({ message: "Food updated successfully", food: updated })
+} catch (err) {
+console.error("Error updating food:", err)
+res.status(500).json({ error: "Failed to update food" })
+}
+})
+
+app.delete("/api/foods/:id", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+await foodsCollection.deleteOne({ _id: new ObjectId(id) })
+res.json({ message: "Food item deleted successfully" })
+} catch (err) {
+console.error("Error deleting food:", err)
+res.status(500).json({ error: "Failed to delete food" })
+}
+})
 // ==========================================
 // 6. ORDER APIs (Guaranteed MongoDB Persistence)
 
