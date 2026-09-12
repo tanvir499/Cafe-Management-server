@@ -951,7 +951,218 @@ res.status(500).json({ error: "Failed to fetch coupons" })
 
 // ==========================================
 // 6. ORDER APIs (Guaranteed MongoDB Persistence)
+// ==========================================
+app.post("/api/orders", authMiddleware, async (req, res) => {
+try {
+const {
+customerName,
+phone,
+address,
+orderNote,
+paymentMethod = "Cash on Delivery",
+items: clientItems,
+subtotal: clientSubtotal,
+discount: clientDiscount,
+couponCode: clientCouponCode,
+total: clientTotal,
+} = req.body
 
+if (!customerName || !phone || !address) {
+return res.status(400).json({ error: "Name, phone, and delivery address are required" })
+}
+
+const userId = req.user?.uid || req.body?.userId || "guest-uid"
+const email = req.user?.email || req.body?.email || "customer@cafe.com"
+
+// Check DB cart or use client provided items
+let cart = null
+if (cartsCollection && userId) {
+cart = await cartsCollection.findOne({ userId })
+}
+
+let itemsToProcess = (cart && cart.items && cart.items.length > 0) ? cart.items : (clientItems || [])
+
+if (itemsToProcess.length === 0) {
+return res.status(400).json({ error: "Cannot create order with an empty cart" })
+}
+
+let calc = await recalculateCart(itemsToProcess, clientCouponCode || cart?.couponCode)
+
+// Fallback calculation if items were directly supplied
+if ((!calc.items || calc.items.length === 0) && clientItems && clientItems.length > 0) {
+calc = {
+items: clientItems,
+subtotal: Number(clientSubtotal) || 0,
+discount: Number(clientDiscount) || 0,
+couponCode: clientCouponCode || null,
+total: Number(clientTotal) || 0,
+}
+}
+
+const newOrder = {
+userId,
+email,
+customerName: customerName.trim(),
+phone: phone.trim(),
+address: address.trim(),
+orderNote: orderNote || "",
+items: calc.items,
+subtotal: calc.subtotal,
+discount: calc.discount,
+couponCode: calc.couponCode,
+total: calc.total,
+paymentMethod: paymentMethod,
+paymentStatus: paymentMethod === "Online Payment" ? "Paid" : "Pending",
+orderStatus: "Pending",
+createdAt: new Date(),
+updatedAt: new Date(),
+}
+
+let result = { insertedId: new ObjectId() }
+if (ordersCollection) {
+result = await ordersCollection.insertOne(newOrder)
+console.log(`[MongoDB] New Order Created: ID=${result.insertedId}, Customer=${customerName}, Total=$${newOrder.total}`)
+}
+
+if (usersCollection && userId) {
+await usersCollection.updateOne(
+{ uid: userId },
+{ $set: { phone: phone.trim(), address: address.trim(), updatedAt: new Date() } }
+)
+}
+
+if (cartsCollection && userId) {
+await cartsCollection.updateOne(
+{ userId },
+{
+$set: {
+items: [],
+subtotal: 0,
+discount: 0,
+couponCode: null,
+total: 0,
+updatedAt: new Date(),
+},
+}
+)
+}
+
+res.status(201).json({
+message: "Order placed successfully!",
+order: { ...newOrder, _id: result.insertedId },
+})
+} catch (err) {
+console.error("Error creating order:", err)
+res.status(500).json({ error: "Failed to place order: " + err.message })
+}
+})
+
+app.get("/api/orders/my-orders", authMiddleware, async (req, res) => {
+try {
+let orders = []
+const uid = req.user?.uid || req.query?.userId
+const email = req.user?.email || req.query?.email
+
+if (ordersCollection) {
+const userQuery = {
+$or: [
+...(uid ? [{ userId: uid }] : []),
+...(email ? [{ email: email }] : []),
+],
+}
+orders = await ordersCollection.find(userQuery).sort({ createdAt: -1 }).toArray()
+}
+res.json(orders)
+} catch (err) {
+console.error("Error fetching customer orders:", err)
+res.status(500).json({ error: "Failed to fetch orders" })
+}
+})
+
+app.get("/api/orders/:id", authMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+if (ordersCollection) {
+if (ObjectId.isValid(id)) {
+const order = await ordersCollection.findOne({ _id: new ObjectId(id) })
+if (order) return res.json(order)
+}
+const order = await ordersCollection.findOne({ _id: id })
+if (order) return res.json(order)
+}
+res.status(404).json({ error: "Order not found" })
+} catch (err) {
+console.error("Error fetching order:", err)
+res.status(500).json({ error: "Invalid order ID" })
+}
+})
+
+app.get("/api/admin/orders", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { search, status } = req.query
+const query = {}
+
+if (status && status !== "All") {
+query.orderStatus = status
+}
+
+if (search) {
+const searchRegex = { $regex: search, $options: "i" }
+query.$or = [
+{ customerName: searchRegex },
+{ email: searchRegex },
+{ userId: searchRegex },
+{ phone: searchRegex },
+]
+if (ObjectId.isValid(search)) {
+query.$or.push({ _id: new ObjectId(search) })
+}
+}
+
+const orders = await ordersCollection.find(query).sort({ createdAt: -1 }).toArray()
+res.json(orders)
+} catch (err) {
+console.error("Error fetching admin orders:", err)
+res.status(500).json({ error: "Failed to fetch orders" })
+}
+})
+
+app.patch("/api/admin/orders/:id/status", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { status } = req.body
+const updateFields = { orderStatus: status, updatedAt: new Date() }
+if (status === "Completed") updateFields.paymentStatus = "Paid"
+
+if (ObjectId.isValid(id)) {
+await ordersCollection.updateOne({ _id: new ObjectId(id) }, { $set: updateFields })
+} else {
+await ordersCollection.updateOne({ _id: id }, { $set: updateFields })
+}
+const updated = await ordersCollection.findOne(ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id })
+res.json({ message: "Order status updated", order: updated })
+} catch (err) {
+console.error("Error updating order status:", err)
+res.status(500).json({ error: "Failed to update order status" })
+}
+})
+
+app.patch("/api/admin/orders/:id/payment-status", authMiddleware, adminMiddleware, async (req, res) => {
+try {
+const { id } = req.params
+const { paymentStatus } = req.body
+if (ObjectId.isValid(id)) {
+await ordersCollection.updateOne({ _id: new ObjectId(id) }, { $set: { paymentStatus, updatedAt: new Date() } })
+} else {
+await ordersCollection.updateOne({ _id: id }, { $set: { paymentStatus, updatedAt: new Date() } })
+}
+const updated = await ordersCollection.findOne(ObjectId.isValid(id) ? { _id: new ObjectId(id) } : { _id: id })
+res.json({ message: "Payment status updated", order: updated })
+} catch (err) {
+console.error("Error updating payment status:", err)
+res.status(500).json({ error: "Failed to update payment status" })
+}
+})
 
 // ==========================================
 // 11. SEED DATA API
